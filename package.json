@@ -1,0 +1,12 @@
+{
+  "name": "qr-verification-client",
+  "version": "1.0.0",
+  "description": "QR Verification - Klant Frontend",
+  "scripts": {
+    "dev": "npx http-server . -p 3000",
+    "build": "echo 'Static files ready'"
+  },
+  "keywords": ["qr", "client", "frontend"],
+  "author": "L",
+  "license": "MIT"
+}
